@@ -127,7 +127,7 @@ class LedControlUI(QWidget):
         uni_label.setStyleSheet('color: #00bfff;')
         info_card_layout.addWidget(uni_label)
 
-        info_label = QLabel('Materia: Electricidad y Electrónica')
+        info_label = QLabel('Materia: MICROS')
         info_label.setFont(QFont('Arial', 18, QFont.Weight.Bold))
         info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         info_label.setStyleSheet('color: #00ff99;')
@@ -146,12 +146,7 @@ class LedControlUI(QWidget):
         names_list_layout.setContentsMargins(0, 0, 0, 0)
         names_list.setLayout(names_list_layout)
         for name in [
-            'Julied Gomez',
-            'Valeria Bolivar',
-            'Juliana Torres',
-            'Nikol Gomez',
-            'Fabian Moncada',
-            'Manuela Cortes'
+            'Daniel García Araque,Belfo Junior , Angel '
         ]:
             name_label = QLabel(name)
             name_label.setFont(QFont('Arial', 11))
