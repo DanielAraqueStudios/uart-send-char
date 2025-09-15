@@ -131,7 +131,7 @@ async function readLoop() {
   }
   window.addEventListener('resize', resize);
   resize();
-  const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz@#$%&*()';
+  const chars = '01';
   function draw(){
     ctx.fillStyle = 'rgba(0,0,0,0.06)';
     ctx.fillRect(0,0,width,height);
