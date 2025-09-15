@@ -26,6 +26,12 @@
 #define UART_BUF_SIZE 1024
 
 static const char *TAG = "BTN_UART";
+// change queue to hold event struct with timestamp and level
+typedef struct {
+    uint32_t gpio_num;
+    int level_at_isr;      // 0 = low, 1 = high
+    int64_t isr_ts_us;     // timestamp from esp_timer_get_time()
+} gpio_event_t;
 static QueueHandle_t gpio_evt_queue = NULL;
 static char last_sent_letter = 0;
 
@@ -42,11 +48,14 @@ void uart_init(void) {
     uart_set_pin(UART_PORT, UART_TX_PIN, UART_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
 }
 
-/* ISR: push gpio number to queue */
+/* ISR: push gpio event (with timestamp and level) to queue */
 static void IRAM_ATTR button_isr_handler(void* arg) {
-    uint32_t gpio_num = (uint32_t) arg;
+    gpio_event_t evt;
+    evt.gpio_num = (uint32_t) arg;
+    evt.level_at_isr = gpio_get_level(evt.gpio_num);
+    evt.isr_ts_us = esp_timer_get_time();
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    xQueueSendFromISR(gpio_evt_queue, &gpio_num, &xHigherPriorityTaskWoken);
+    xQueueSendFromISR(gpio_evt_queue, &evt, &xHigherPriorityTaskWoken);
     if (xHigherPriorityTaskWoken) {
         portYIELD_FROM_ISR();
     }
@@ -54,15 +63,25 @@ static void IRAM_ATTR button_isr_handler(void* arg) {
 
 /* Task: process button events, debounce, pick random different letter and send via UART */
 void button_task(void *arg) {
-    uint32_t io_num;
+    gpio_event_t evt;
     const TickType_t debounce_ticks = pdMS_TO_TICKS(200);
+    const uint32_t debounce_ms = 200;
     while (1) {
-        if (xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
+        if (xQueueReceive(gpio_evt_queue, &evt, portMAX_DELAY)) {
+            int64_t recv_ts_us = esp_timer_get_time();
+            ESP_LOGI(TAG, "Detected input on GPIO %d level_at_isr=%d at %lld us", evt.gpio_num, evt.level_at_isr, (long long)evt.isr_ts_us);
+            ESP_LOGI(TAG, "Event queued and received at %lld us (latency %lld us)", (long long)recv_ts_us, (long long)(recv_ts_us - evt.isr_ts_us));
+
             /* simple debounce: wait and check stable level (assuming active-low button) */
             vTaskDelay(debounce_ticks);
-            int level = gpio_get_level(io_num);
+            int level = gpio_get_level(evt.gpio_num);
+            ESP_LOGI(TAG, "After debounce (%u ms) level=%d", debounce_ms, level);
+
             /* If button is active-low and now low, treat as valid press */
             if (level == 0) {
+                /* mark interrupt handled */
+                ESP_LOGI(TAG, "Interrupt on GPIO %d handled: valid press detected", evt.gpio_num);
+
                 /* pick a random letter A-Z different from last_sent_letter */
                 char letter = 0;
                 for (int attempts = 0; attempts < 10; ++attempts) {
@@ -78,7 +97,10 @@ void button_task(void *arg) {
                 /* send the letter over UART (single byte). Append newline for readability. */
                 char outbuf[2] = { letter, '\n' };
                 int tx_bytes = uart_write_bytes(UART_PORT, outbuf, sizeof(outbuf));
-                ESP_LOGI(TAG, "Button GPIO %d pressed -> sent '%c' (%d bytes)", io_num, letter, tx_bytes);
+                int64_t send_ts_us = esp_timer_get_time();
+                ESP_LOGI(TAG, "Sent '%c' (%d bytes) at %lld us (time since ISR %lld us)", letter, tx_bytes, (long long)send_ts_us, (long long)(send_ts_us - evt.isr_ts_us));
+            } else {
+                ESP_LOGI(TAG, "Interrupt on GPIO %d ignored after debounce: not a press", evt.gpio_num);
             }
         }
     }
@@ -95,7 +117,7 @@ void button_init(void) {
     gpio_config(&io_conf);
 
     /* create a queue to handle gpio event from isr */
-    gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
+    gpio_evt_queue = xQueueCreate(10, sizeof(gpio_event_t));
     /* install gpio isr service */
     gpio_install_isr_service(0);
     /* hook isr handler for specific gpio pin */
