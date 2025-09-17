@@ -20,9 +20,9 @@
 #include "esp_timer.h"
 
 #define BUTTON_GPIO 4    // External button GPIO (changed to GPIO4)
-#define UART_PORT UART_NUM_0
-#define UART_TX_PIN UART_PIN_NO_CHANGE   // use default UART0 pins
-#define UART_RX_PIN UART_PIN_NO_CHANGE
+#define UART_PORT UART_NUM_1
+#define UART_TX_PIN 17   // UART1 TX -> GPIO17
+#define UART_RX_PIN 16   // UART1 RX -> GPIO16
 #define UART_BUF_SIZE 1024
 
 static const char *TAG = "BTN_UART";
