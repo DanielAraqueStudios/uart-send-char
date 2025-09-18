@@ -32,9 +32,7 @@ The ESP32-S3 firmware uses a multi-layered approach combining hardware interrupt
 ### Hardware Configuration
 ```c
 #define BUTTON_PIN 6           // GPIO6 for button input
-#define UART_PORT UART_NUM_1   // UART1 for communication
-#define UART_TX_PIN 17         // TX pin
-#define UART_RX_PIN 16         // RX pin
+#define UART_PORT UART_NUM_0   // UART0 uses USB-Serial converter
 ```
 
 **Button Setup:**
@@ -43,7 +41,8 @@ The ESP32-S3 firmware uses a multi-layered approach combining hardware interrupt
 - **Rising edge** interrupt trigger (`GPIO_INTR_POSEDGE`)
 
 **UART Configuration:**
-- **UART1** with configurable baud rate (1200/128000/460800 bps)
+- **UART0** with configurable baud rate (1200/128000/460800 bps)
+- **Uses built-in USB-Serial converter** - no external pins needed
 - **8 data bits, no parity, 1 stop bit**
 - **No hardware flow control**
 - **1024-byte buffer** for reliable transmission
@@ -82,21 +81,22 @@ char letter = 'A' + (random_val % 26);
 
 ### UART Transmission
 ```c
-char msg[5];
-snprintf(msg, sizeof(msg), "%c\n", letter);
-uart_write_bytes(UART_PORT, msg, strlen(msg));
+// Send only the character (no newline, no formatting)
+uart_write_bytes(UART_PORT, &letter, 1);
 ```
-- **Formatted output**: Letter + newline character
-- **Buffer safety**: Fixed-size buffer prevents overflow
+- **Raw character output**: Sends only the letter (A-Z) without formatting
+- **Single byte transmission**: Minimal data for efficient communication
 - **Blocking write**: Ensures complete transmission before continuing
+- **Frontend reconstruction**: GUIs receive the raw character and rebuild log messages
 
 ### Logging System
 ```c
 ESP_LOGI(TAG, "Button pressed -> Sent '%c'", letter);
 ```
-- **ESP_LOGI**: Info-level logging for normal operation
-- **Standardized format**: "Button pressed -> Sent 'X'" for easy GUI parsing
-- **TAG identification**: "LED_UART" tag for log filtering
+- **ESP_LOGI**: Info-level logging for debugging (console only)
+- **Local logging**: Logs are NOT sent over UART to GUIs
+- **TAG identification**: "LED_UART" tag for ESP-IDF monitor filtering
+- **GUI independence**: Firmware logs and GUI data are separate
 
 ### Task Structure
 - **Main task**: Initializes hardware and creates button task, then sleeps
@@ -109,10 +109,23 @@ ESP_LOGI(TAG, "Button pressed -> Sent '%c'", letter);
 - **GPIO validation**: Confirms button state after debounce
 - **UART buffer management**: 2KB buffer handles burst transmissions
 
+### Communication Protocol
+**Backend → Frontend:**
+- **Raw character transmission**: Backend sends only the letter (A-Z) as a single byte
+- **No formatting**: No newlines, no "Sent" prefix, no additional metadata
+- **Minimal bandwidth**: Each button press = 1 byte transmitted
+
+**Frontend Processing:**
+- **Character detection**: Receives raw character and validates it's A-Z
+- **Message reconstruction**: Rebuilds "Sent 'X'" format for log display
+- **State inference**: Assumes button HIGH state when letter received
+- **UI updates**: Updates last letter display and log with reconstructed message
+
 ### Power Considerations
 - **Pull-down resistor**: Prevents floating input and reduces power consumption
 - **Task delays**: Regular delays allow other tasks to run and save power
 - **Efficient ISR**: Minimal processing in interrupt context
+- **Minimal UART traffic**: Single character transmission reduces power usage
 
 ## Build & Flash (ESP-IDF)
 1. Set up ESP-IDF and the toolchain per Espressif instructions.

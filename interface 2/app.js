@@ -110,17 +110,22 @@ async function readLoop() {
       const { value, done } = await reader.read();
       if (done) break;
       if (value) {
-        const lines = value.split('\n');
-        for (let l of lines) {
-          l = l.trim();
-          if (!l) continue;
-          appendLog(l);
-          // parse Sent 'X'
-          const m = l.match(/Sent\s+'([A-Z])'/);
-          if (m) { lastLetterEl.textContent = 'Última letra enviada: ' + m[1]; }
-          // parse level_at_isr= or level=
-          const ml = l.match(/level_at_isr=(\d)/) || l.match(/level=(\d)/);
-          if (ml) { btnStateEl.textContent = (ml[1]==='1') ? 'Estado del pulsador: ALTO (3.3V)' : 'Estado del pulsador: BAJO (GND)'; }
+        // Process each character received
+        for (let i = 0; i < value.length; i++) {
+          const char = value.charAt(i);
+          
+          // Check if it's a letter A-Z
+          if (char >= 'A' && char <= 'Z') {
+            // Reconstruct the log message format that UI expects
+            const reconstructedMsg = `Sent '${char}'`;
+            appendLog(reconstructedMsg);
+            
+            // Update last letter display
+            lastLetterEl.textContent = 'Última letra enviada: ' + char;
+            
+            // Update button state (assume HIGH when letter is sent)
+            btnStateEl.textContent = 'Estado del pulsador: ALTO (3.3V)';
+          }
         }
       }
     }

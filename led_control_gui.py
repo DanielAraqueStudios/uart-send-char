@@ -62,23 +62,28 @@ class SerialReader(QObject):
 
     def _read_loop(self):
         ser = self._serial
-        partial = b""
         while not self._stop.is_set() and ser and ser.is_open:
             try:
-                data = ser.read(256)
+                data = ser.read(1)  # Read one byte at a time
             except Exception:
                 break
             if not data:
                 time.sleep(0.01)
                 continue
-            partial += data
-            while b"\n" in partial:
-                line, partial = partial.split(b"\n", 1)
-                try:
-                    text = line.decode(errors='replace').strip()
-                except Exception:
-                    text = repr(line)
-                self.line_received.emit(text)
+            
+            try:
+                # Decode the received character
+                char = data.decode('utf-8', errors='replace')
+                
+                # Check if it's a letter A-Z
+                if char.isalpha() and char.isupper():
+                    # Reconstruct the log message format that GUIs expect
+                    reconstructed_msg = f"Sent '{char}'"
+                    self.line_received.emit(reconstructed_msg)
+                
+            except Exception:
+                # Handle any decoding errors
+                pass
         # close handled by stop()
 
 
@@ -336,9 +341,13 @@ class LedControlGUI(QWidget):
         if not txt or len(txt) != 1 or not txt.isalpha():
             self._append_log("Letra manual inválida. Ingrese una única letra A-Z.")
             return
-        data = f"{txt}\n".encode()
+        
+        # Send only the character (no newline, matching backend behavior)
+        data = txt.encode()
         self._reader.write(data)
-        self._append_log(f"Enviado manualmente: {txt}")
+        
+        # Simulate the reconstructed message in the log
+        self._append_log(f"Sent '{txt}'")
 
 
 if __name__ == '__main__':
