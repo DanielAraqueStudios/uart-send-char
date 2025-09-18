@@ -64,23 +64,38 @@ btnSend.addEventListener('click', async () => {
   const t = (manualInput.value || '').toUpperCase().trim();
   if (!/^[A-Z]$/.test(t)) { appendLog('Invalid manual letter'); return; }
   if (!outputStream) { appendLog('Not connected'); return; }
-  const writer = outputStream.getWriter();
-  await writer.write(t + '\n');
-  writer.releaseLock();
-  appendLog('Manually sent: ' + t);
+  try {
+    const writer = outputStream.getWriter();
+    const encoder = new TextEncoder();
+    await writer.write(encoder.encode(t + '\n'));
+    writer.releaseLock();
+    appendLog('Manually sent: ' + t);
+  } catch (e) {
+    appendLog('Send error: ' + e);
+  }
 });
 
 async function disconnect() {
   if (reader) {
-    await reader.cancel();
-    await inputDone.catch(() => {});
+    try {
+      await reader.cancel();
+    } catch (e) {
+      console.log('Reader cancel error:', e);
+    }
+    if (inputDone) {
+      await inputDone.catch(() => {});
+    }
     reader = null;
     inputDone = null;
   }
-  if (port) {
-    await port.close();
-    port = null;
+  if (port && port.readable) {
+    try {
+      await port.close();
+    } catch (e) {
+      console.log('Port close error:', e);
+    }
   }
+  port = null;
   outputStream = null;
   connStatus.textContent = 'Disconnected';
   connStatus.style.background = '';
@@ -90,23 +105,34 @@ async function disconnect() {
 }
 
 async function readLoop() {
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    if (value) {
-      const lines = value.split('\n');
-      for (let l of lines) {
-        l = l.trim();
-        if (!l) continue;
-        appendLog(l);
-        // parse Sent 'X'
-        const m = l.match(/Sent\s+'([A-Z])'/);
-        if (m) { lastLetterEl.textContent = 'Last sent letter: ' + m[1]; }
-        // parse level_at_isr= or level=
-        const ml = l.match(/level_at_isr=(\d)/) || l.match(/level=(\d)/);
-        if (ml) { btnStateEl.textContent = (ml[1]==='1') ? 'Button state: HIGH (3.3V)' : 'Button state: LOW (GND)'; }
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) {
+        const lines = value.split('\n');
+        for (let l of lines) {
+          l = l.trim();
+          if (!l) continue;
+          appendLog(l);
+          // parse Sent 'X'
+          const m = l.match(/Sent\s+'([A-Z])'/);
+          if (m) { lastLetterEl.textContent = 'Última letra enviada: ' + m[1]; }
+          // parse level_at_isr= or level=
+          const ml = l.match(/level_at_isr=(\d)/) || l.match(/level=(\d)/);
+          if (ml) { btnStateEl.textContent = (ml[1]==='1') ? 'Estado del pulsador: ALTO (3.3V)' : 'Estado del pulsador: BAJO (GND)'; }
+        }
       }
     }
+  } catch (e) {
+    if (e.name === 'NetworkError' && e.message.includes('device has been lost')) {
+      appendLog('Device disconnected - auto-disconnecting');
+      await disconnect();
+    } else {
+      appendLog('Read loop error: ' + e);
+    }
+  } finally {
+    appendLog('Read loop ended');
   }
 }
 

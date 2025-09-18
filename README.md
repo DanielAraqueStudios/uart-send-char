@@ -1,57 +1,192 @@
-# _Sample project_
+# TURN_LED_WITH_UART_GUI
 
-(See the README.md file in the upper level 'examples' directory for more information about examples.)
+Project: ESP32-S3 button → random-letter UART sender + dual GUIs (PyQt6 desktop and Web Serial).
 
-This is the simplest buildable example. The example is used by command `idf.py create-project`
-that copies the project to user specified path and set it's name. For more information follow the [docs page](https://docs.espressif.com/projects/esp-idf/en/latest/api-guides/build-system.html#start-a-new-project)
+## University / Course / Team
+- Universidad Militar Nueva Granada
+- Materia: Micros
+- Integrantes: Daniel García Araque, Santiago Rubiano, Karol Daniela Mosquera Prieto
 
+## Summary
+Firmware running on an ESP32-S3 monitors an external button and, on each valid press, sends a single uppercase letter (A–Z) over UART. The letter is guaranteed to be different from the last sent value. Two user interfaces display the received letters and the button logical state:
+- Desktop GUI: Python + PyQt6 (`led_control_gui.py`) with serial port & baud selection.
+- Web GUI: Modern dark Web UI using the Web Serial API (`interface 2/index.html` + `interface 2/app.js`).
 
+## Hardware pinout (default)
+- Button (active-high): GPIO6 (internal pull-down enabled)
+- UART: UART0 (default pins on many devkits)
+  - TX0 = GPIO1 (connected to USB-serial TX on many boards)
+  - RX0 = GPIO3 (connected to USB-serial RX on many boards)
 
-## How to use example
-We encourage the users to use the example as a template for the new projects.
-A recommended way is to follow the instructions on a [docs page](https://docs.espressif.com/projects/esp-idf/en/latest/api-guides/build-system.html#start-a-new-project).
+Wiring example:
+- Button: one side to GPIO6, other side to 3.3V. Use internal pull-down (firmware enables it).
+- Connect the devkit to the host PC via USB; UART0 typically routed through the onboard USB-serial chip.
 
-## Example folder contents
+> Important: Button is now active-high (press = 3.3V) with pull-down resistor enabled.
 
-The project **sample_project** contains one source file in C language [main.c](main/main.c). The file is located in folder [main](main).
+## Backend Firmware (main.c) - Detailed Implementation
 
-ESP-IDF projects are built using CMake. The project build configuration is contained in `CMakeLists.txt`
-files that provide set of directives and instructions describing the project's source files and targets
-(executable, library, or both). 
+### Architecture Overview
+The ESP32-S3 firmware uses a multi-layered approach combining hardware interrupts, FreeRTOS tasks, and UART communication to create a responsive button-to-serial letter transmission system.
 
-Below is short explanation of remaining files in the project folder.
-
-```
-├── CMakeLists.txt
-├── main
-│   ├── CMakeLists.txt
-│   └── main.c
-└── README.md                  This is the file you are currently reading
-```
-Additionally, the sample project contains Makefile and component.mk files, used for the legacy Make based build system. 
-They are not used or needed when building with CMake and idf.py.
-
-## ESP32-S3 LED Control Pinout
-
-This project uses two GPIO pins and UART for communication with the ESP32-S3:
-
-| Signal         | ESP32-S3 GPIO Pin | Description                                 |
-|----------------|-------------------|---------------------------------------------|
-| LED1           | GPIO2             | LED 1 Control Pin                           |
-| LED2           | GPIO4             | LED 2 Control Pin                           |
-| UART TX        | GPIO17            | ESP32 UART TX (connect to USB-to-Serial RX) |
-| UART RX        | GPIO16            | ESP32 UART RX (connect to USB-to-Serial TX) |
-
-**Wiring Instructions:**
-- Connect the anode (long leg) of each LED to the specified GPIO pin via a current-limiting resistor (220Ω–330Ω recommended).
-- Connect the cathode (short leg) of each LED to GND.
-- UART TX (GPIO17) connects to the RX pin of your USB-to-Serial adapter.
-- UART RX (GPIO16) connects to the TX pin of your USB-to-Serial adapter.
-
-**Example Schematic:**
-```
-ESP32-S3 GPIO2 ----[220Ω]----|>|---- GND   (LED1)
-ESP32-S3 GPIO4 ----[220Ω]----|>|---- GND   (LED2)
+### Hardware Configuration
+```c
+#define BUTTON_PIN 6           // GPIO6 for button input
+#define UART_PORT UART_NUM_1   // UART1 for communication
+#define UART_TX_PIN 17         // TX pin
+#define UART_RX_PIN 16         // RX pin
 ```
 
-> **Note:** You can change the GPIO pins in `main.c` by modifying the `LED1_GPIO`, `LED2_GPIO`, `UART_TX_PIN`, and `UART_RX_PIN` definitions to match your hardware setup.
+**Button Setup:**
+- **GPIO6** configured as input with **pull-down resistor** enabled
+- **Active-high** logic: button press = 3.3V, release = 0V
+- **Rising edge** interrupt trigger (`GPIO_INTR_POSEDGE`)
+
+**UART Configuration:**
+- **UART1** with configurable baud rate (1200/128000/460800 bps)
+- **8 data bits, no parity, 1 stop bit**
+- **No hardware flow control**
+- **1024-byte buffer** for reliable transmission
+
+### Interrupt Service Routine (ISR)
+```c
+static void IRAM_ATTR button_isr_handler(void* arg) {
+    uint32_t gpio_num = (uint32_t) arg;
+    xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
+}
+```
+- **IRAM_ATTR**: Stores function in internal RAM for fastest execution
+- **Non-blocking**: Only queues the event, actual processing happens in task context
+- **Thread-safe**: Uses FreeRTOS queue to communicate with task
+
+### Debounce Algorithm
+```c
+const TickType_t debounce_ticks = pdMS_TO_TICKS(50); // 50ms debounce
+vTaskDelay(debounce_ticks);
+int level = gpio_get_level(io_num);
+if (level == 1) { // Confirm button still pressed }
+```
+- **50ms delay** after interrupt to avoid mechanical bounce
+- **Level confirmation**: Re-reads GPIO to ensure sustained press
+- **False positive prevention**: Ignores glitches and partial presses
+
+### Random Letter Generation
+```c
+uint32_t random_val = (uint32_t)esp_timer_get_time() ^ xTaskGetTickCount();
+char letter = 'A' + (random_val % 26);
+```
+- **High-resolution timer** (`esp_timer_get_time()`) provides microsecond precision
+- **XOR with tick count** adds additional entropy
+- **Modulo 26** ensures letters A-Z range
+- **No duplicate prevention**: Each press generates truly random letter
+
+### UART Transmission
+```c
+char msg[5];
+snprintf(msg, sizeof(msg), "%c\n", letter);
+uart_write_bytes(UART_PORT, msg, strlen(msg));
+```
+- **Formatted output**: Letter + newline character
+- **Buffer safety**: Fixed-size buffer prevents overflow
+- **Blocking write**: Ensures complete transmission before continuing
+
+### Logging System
+```c
+ESP_LOGI(TAG, "Button pressed -> Sent '%c'", letter);
+```
+- **ESP_LOGI**: Info-level logging for normal operation
+- **Standardized format**: "Button pressed -> Sent 'X'" for easy GUI parsing
+- **TAG identification**: "LED_UART" tag for log filtering
+
+### Task Structure
+- **Main task**: Initializes hardware and creates button task, then sleeps
+- **Button task**: Infinite loop processing queued button events
+- **ISR**: Minimal interrupt handler for immediate response
+- **Priority 10**: High priority for responsive button handling
+
+### Error Handling
+- **Queue overflow protection**: 10-event queue prevents memory issues
+- **GPIO validation**: Confirms button state after debounce
+- **UART buffer management**: 2KB buffer handles burst transmissions
+
+### Power Considerations
+- **Pull-down resistor**: Prevents floating input and reduces power consumption
+- **Task delays**: Regular delays allow other tasks to run and save power
+- **Efficient ISR**: Minimal processing in interrupt context
+
+## Build & Flash (ESP-IDF)
+1. Set up ESP-IDF and the toolchain per Espressif instructions.
+2. From the project directory:
+   - idf.py set-target esp32s3
+   - idf.py build
+   - idf.py -p /dev/ttyACM0 flash monitor
+
+Use the correct serial port for your system (typically `/dev/ttyACM0` for ESP32-S3). If you get a port busy error, close other applications using the serial port.
+
+## Baud Rate Testing
+The project supports multiple baud rates for testing:
+- **1200 bps** (current default)
+- **128000 bps** 
+- **460800 bps**
+
+To change baud rate: modify `.baud_rate = XXXX` in `main.c`, rebuild and flash. Both interfaces support all these speeds in their dropdown menus.
+
+## Interfaces
+Both interfaces support the three testing baud rates (1200, 128000, 460800 bps) in their dropdown menus.
+
+### Python GUI (`led_control_gui.py`)
+**Requirements:**
+- Python 3
+- PyQt6
+- pyserial
+
+**Setup:**
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install PyQt6 pyserial
+python led_control_gui.py
+```
+
+**Usage:**
+1. Select your serial port from the dropdown
+2. Select baud rate (1200, 128000, or 460800 bps)
+3. Click "Connect" to begin monitoring
+4. Press the button on the ESP32-S3 to see letters appear
+5. Use "Send Manual Letter" to send random letters from the GUI
+
+**Features:** Serial port selection, 3 baud rate options, live log display, last letter indicator, button state display (ALTO/BAJO), manual letter sending, Matrix background animation.
+
+### Web Interface (`interface 2/index.html`)
+**Requirements:**
+- Chromium-based browser with Web Serial API support (Chrome, Edge)
+
+**Usage:**
+1. Open `interface 2/index.html` in your browser
+2. Click "Select Port" and choose your ESP32-S3 device
+3. Select baud rate (1200, 128000, or 460800 bps)
+4. Click "Connect" to begin monitoring
+5. Press the button on ESP32-S3 to see letters appear
+
+**Features:** Serial port selection, 3 baud rate options, live log display, last letter indicator, button state display, Matrix background animation, automatic reconnection on disconnect.
+
+## Log format (for GUI parsing)
+The firmware emits lines the GUIs parse. Examples:
+- Detected input on GPIO 4 level_at_isr=1 at 12345678 us
+- After debounce (200 ms) level=0
+- Interrupt on GPIO 4 handled: valid press detected
+- Sent 'K' (2 bytes) at 12346789 us (time since ISR 1011 us)
+
+GUIs look for `level_at_isr=` or `level=` and `Sent 'X'` to update UI state.
+
+## Tips and Recommendations
+- Button wiring: use a debounced mechanical button or adjust debounce timing (`debounce_ticks`) in firmware.
+- Randomness: the firmware uses timestamps for lightweight randomness. For enhanced entropy use `esp_random()` and seed appropriately.
+- If you want to remap UART pins or use UART1/2, update `uart_set_pin` and code accordingly and avoid using pins required for flashing.
+
+If you want, I can:
+- Add a second desktop GUI in another toolkit/IDE, or
+- Harden the firmware (robust PRNG, state machine, edge filtering), or
+- Add a testing script that logs incoming characters and timestamps on the PC.
+
+---
