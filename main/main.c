@@ -14,9 +14,7 @@
 #include "esp_log.h"
 
 #define BUTTON_PIN 6
-#define UART_PORT UART_NUM_1
-#define UART_TX_PIN 17
-#define UART_RX_PIN 16
+#define UART_PORT UART_NUM_0  // UART0 uses USB-Serial converter
 #define UART_BUF_SIZE 1024
 
 static const char *TAG = "LED_UART";
@@ -74,7 +72,7 @@ void app_main(void)
     };
     uart_driver_install(UART_PORT, UART_BUF_SIZE * 2, 0, 0, NULL, 0);
     uart_param_config(UART_PORT, &uart_config);
-    uart_set_pin(UART_PORT, UART_TX_PIN, UART_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    // No need to set pins for UART0 - it uses USB-Serial converter automatically
     
     // Create queue for GPIO events
     gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
