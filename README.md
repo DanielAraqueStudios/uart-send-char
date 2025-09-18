@@ -13,60 +13,162 @@ Firmware running on an ESP32-S3 monitors an external button and, on each valid p
 - Web GUI: Modern dark Web UI using the Web Serial API (`interface 2/index.html` + `interface 2/app.js`).
 
 ## Hardware pinout (default)
-- Button (active-low): GPIO4 (internal pull-up enabled)
+- Button (active-high): GPIO6 (internal pull-down enabled)
 - UART: UART0 (default pins on many devkits)
   - TX0 = GPIO1 (connected to USB-serial TX on many boards)
   - RX0 = GPIO3 (connected to USB-serial RX on many boards)
 
 Wiring example:
-- Button: one side to GPIO4, other side to GND. Use internal pull-up (firmware enables it).
+- Button: one side to GPIO6, other side to 3.3V. Use internal pull-down (firmware enables it).
 - Connect the devkit to the host PC via USB; UART0 typically routed through the onboard USB-serial chip.
 
-> Important: Do not use GPIO3 for a button if using UART0 via onboard USB. Use GPIO4 as provided.
+> Important: Button is now active-high (press = 3.3V) with pull-down resistor enabled.
 
-## Backend behavior (firmware)
-- main.c monitors the configured button GPIO with an ISR that timestamps events and queues them.
-- A FreeRTOS task debounces the input, validates presses, selects a random letter (A–Z) different from the previous one, and transmits the character plus newline over UART.
-- The firmware emits human-readable log lines via `ESP_LOGI`, including `level_at_isr=<0|1>` and `Sent 'X'` so the GUIs can parse and display state.
+## Backend Firmware (main.c) - Detailed Implementation
+
+### Architecture Overview
+The ESP32-S3 firmware uses a multi-layered approach combining hardware interrupts, FreeRTOS tasks, and UART communication to create a responsive button-to-serial letter transmission system.
+
+### Hardware Configuration
+```c
+#define BUTTON_PIN 6           // GPIO6 for button input
+#define UART_PORT UART_NUM_1   // UART1 for communication
+#define UART_TX_PIN 17         // TX pin
+#define UART_RX_PIN 16         // RX pin
+```
+
+**Button Setup:**
+- **GPIO6** configured as input with **pull-down resistor** enabled
+- **Active-high** logic: button press = 3.3V, release = 0V
+- **Rising edge** interrupt trigger (`GPIO_INTR_POSEDGE`)
+
+**UART Configuration:**
+- **UART1** with configurable baud rate (1200/128000/460800 bps)
+- **8 data bits, no parity, 1 stop bit**
+- **No hardware flow control**
+- **1024-byte buffer** for reliable transmission
+
+### Interrupt Service Routine (ISR)
+```c
+static void IRAM_ATTR button_isr_handler(void* arg) {
+    uint32_t gpio_num = (uint32_t) arg;
+    xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
+}
+```
+- **IRAM_ATTR**: Stores function in internal RAM for fastest execution
+- **Non-blocking**: Only queues the event, actual processing happens in task context
+- **Thread-safe**: Uses FreeRTOS queue to communicate with task
+
+### Debounce Algorithm
+```c
+const TickType_t debounce_ticks = pdMS_TO_TICKS(50); // 50ms debounce
+vTaskDelay(debounce_ticks);
+int level = gpio_get_level(io_num);
+if (level == 1) { // Confirm button still pressed }
+```
+- **50ms delay** after interrupt to avoid mechanical bounce
+- **Level confirmation**: Re-reads GPIO to ensure sustained press
+- **False positive prevention**: Ignores glitches and partial presses
+
+### Random Letter Generation
+```c
+uint32_t random_val = (uint32_t)esp_timer_get_time() ^ xTaskGetTickCount();
+char letter = 'A' + (random_val % 26);
+```
+- **High-resolution timer** (`esp_timer_get_time()`) provides microsecond precision
+- **XOR with tick count** adds additional entropy
+- **Modulo 26** ensures letters A-Z range
+- **No duplicate prevention**: Each press generates truly random letter
+
+### UART Transmission
+```c
+char msg[5];
+snprintf(msg, sizeof(msg), "%c\n", letter);
+uart_write_bytes(UART_PORT, msg, strlen(msg));
+```
+- **Formatted output**: Letter + newline character
+- **Buffer safety**: Fixed-size buffer prevents overflow
+- **Blocking write**: Ensures complete transmission before continuing
+
+### Logging System
+```c
+ESP_LOGI(TAG, "Button pressed -> Sent '%c'", letter);
+```
+- **ESP_LOGI**: Info-level logging for normal operation
+- **Standardized format**: "Button pressed -> Sent 'X'" for easy GUI parsing
+- **TAG identification**: "LED_UART" tag for log filtering
+
+### Task Structure
+- **Main task**: Initializes hardware and creates button task, then sleeps
+- **Button task**: Infinite loop processing queued button events
+- **ISR**: Minimal interrupt handler for immediate response
+- **Priority 10**: High priority for responsive button handling
+
+### Error Handling
+- **Queue overflow protection**: 10-event queue prevents memory issues
+- **GPIO validation**: Confirms button state after debounce
+- **UART buffer management**: 2KB buffer handles burst transmissions
+
+### Power Considerations
+- **Pull-down resistor**: Prevents floating input and reduces power consumption
+- **Task delays**: Regular delays allow other tasks to run and save power
+- **Efficient ISR**: Minimal processing in interrupt context
 
 ## Build & Flash (ESP-IDF)
 1. Set up ESP-IDF and the toolchain per Espressif instructions.
 2. From the project directory:
    - idf.py set-target esp32s3
    - idf.py build
-   - idf.py -p /dev/ttyUSB0 flash monitor
+   - idf.py -p /dev/ttyACM0 flash monitor
 
-Use the correct serial port for your system (e.g. `/dev/ttyUSB0` or `/dev/ttyACM0`). If you get a port busy error, close other applications using the serial port.
+Use the correct serial port for your system (typically `/dev/ttyACM0` for ESP32-S3). If you get a port busy error, close other applications using the serial port.
 
-## Desktop GUI (PyQt6)
-File: `led_control_gui.py`
-Requirements:
+## Baud Rate Testing
+The project supports multiple baud rates for testing:
+- **1200 bps** (current default)
+- **128000 bps** 
+- **460800 bps**
+
+To change baud rate: modify `.baud_rate = XXXX` in `main.c`, rebuild and flash. Both interfaces support all these speeds in their dropdown menus.
+
+## Interfaces
+Both interfaces support the three testing baud rates (1200, 128000, 460800 bps) in their dropdown menus.
+
+### Python GUI (`led_control_gui.py`)
+**Requirements:**
 - Python 3
 - PyQt6
 - pyserial
 
-Recommended: create and activate a virtual environment in the project folder:
-
+**Setup:**
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install PyQt6 pyserial
 python led_control_gui.py
+```
 
-Features:
-- Select serial port and baud rate
-- Connect / Disconnect
-- Live log view
-- Shows last received letter and button logical state (ALTO/BAJO)
-- Manual single-letter send
-- Dark-mode with Matrix background animation
+**Usage:**
+1. Select your serial port from the dropdown
+2. Select baud rate (1200, 128000, or 460800 bps)
+3. Click "Connect" to begin monitoring
+4. Press the button on the ESP32-S3 to see letters appear
+5. Use "Send Manual Letter" to send random letters from the GUI
 
-## Web GUI (Web Serial API)
-Files: `interface 2/index.html`, `interface 2/app.js`
-Notes:
-- Requires a Chromium-based browser with Web Serial support (Chrome, Edge).
-- Open `interface 2/index.html` in the browser (use file:// or host via a static server).
-- Use the "Select Port" button to pick the serial device and press Connect.
-- Web UI displays logs, last received letter and button state, and includes Matrix background animation.
+**Features:** Serial port selection, 3 baud rate options, live log display, last letter indicator, button state display (ALTO/BAJO), manual letter sending, Matrix background animation.
+
+### Web Interface (`interface 2/index.html`)
+**Requirements:**
+- Chromium-based browser with Web Serial API support (Chrome, Edge)
+
+**Usage:**
+1. Open `interface 2/index.html` in your browser
+2. Click "Select Port" and choose your ESP32-S3 device
+3. Select baud rate (1200, 128000, or 460800 bps)
+4. Click "Connect" to begin monitoring
+5. Press the button on ESP32-S3 to see letters appear
+
+**Features:** Serial port selection, 3 baud rate options, live log display, last letter indicator, button state display, Matrix background animation, automatic reconnection on disconnect.
 
 ## Log format (for GUI parsing)
 The firmware emits lines the GUIs parse. Examples:

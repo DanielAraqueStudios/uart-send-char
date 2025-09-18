@@ -177,9 +177,9 @@ class LedControlGUI(QWidget):
         self.refresh_btn.clicked.connect(self._refresh_ports)
         baud_label = QLabel("Baud")
         self.baud_combo = QComboBox()
-        for b in [9600, 19200, 38400, 57600, 115200, 230400, 460800]:
+        for b in [1200, 9600, 19200, 38400, 57600, 115200, 128000, 230400, 460800]:
             self.baud_combo.addItem(str(b))
-        self.baud_combo.setCurrentText("115200")
+        self.baud_combo.setCurrentText("1200")
         self.connect_btn = QPushButton("Conectar")
         self.connect_btn.clicked.connect(self._on_connect_click)
         grid.addWidget(port_label, 0, 0)
