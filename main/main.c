@@ -41,9 +41,11 @@ void button_task(void *arg) {
                 // Generate random letter A-Z
                 uint32_t random_val = (uint32_t)esp_timer_get_time() ^ xTaskGetTickCount();
                 char letter = 'A' + (random_val % 26);
-                char msg[5];
-                snprintf(msg, sizeof(msg), "%c\n", letter);
-                uart_write_bytes(UART_PORT, msg, strlen(msg));
+                
+                // Send only the character (no newline, no formatting)
+                uart_write_bytes(UART_PORT, &letter, 1);
+                
+                // Log for debugging (not sent over UART)
                 ESP_LOGI(TAG, "Button pressed -> Sent '%c'", letter);
             }
         }
